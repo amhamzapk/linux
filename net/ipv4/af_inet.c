@@ -1323,6 +1323,9 @@ void inet_sk_state_store(struct sock *sk, int newstate)
 	smp_store_release(&sk->sk_state, newstate);
 }
 
+/*
+ * HAMZA_TSO: 3rd function called for GSO Segmentation
+ */
 struct sk_buff *inet_gso_segment(struct sk_buff *skb,
 				 netdev_features_t features)
 {
@@ -1336,11 +1339,17 @@ struct sk_buff *inet_gso_segment(struct sk_buff *skb,
 	int ihl;
 	int id;
 
+	/*
+	 * HAMZA_TSO: Network header reset!
+	 */
 	skb_reset_network_header(skb);
 	nhoff = skb_network_header(skb) - skb_mac_header(skb);
 	if (unlikely(!pskb_may_pull(skb, sizeof(*iph))))
 		goto out;
 
+	/*
+	 * HAMZA_TSO: IP Header
+	 */
 	iph = ip_hdr(skb);
 	ihl = iph->ihl * 4;
 	if (ihl < sizeof(*iph))
@@ -1352,6 +1361,10 @@ struct sk_buff *inet_gso_segment(struct sk_buff *skb,
 	/* Warning: after this point, iph might be no longer valid */
 	if (unlikely(!pskb_may_pull(skb, ihl)))
 		goto out;
+
+	/*
+	 * HAMZA_TSO: Pull IP Header!
+	 */
 	__skb_pull(skb, ihl);
 
 	encap = SKB_GSO_CB(skb)->encap_level > 0;
@@ -1374,6 +1387,9 @@ struct sk_buff *inet_gso_segment(struct sk_buff *skb,
 
 	ops = rcu_dereference(inet_offloads[proto]);
 	if (likely(ops && ops->callbacks.gso_segment))
+		/*
+		 * HAMZA_TSO: Call TCP Segmentation
+		 */
 		segs = ops->callbacks.gso_segment(skb, features);
 
 	if (IS_ERR_OR_NULL(segs))
@@ -1381,6 +1397,11 @@ struct sk_buff *inet_gso_segment(struct sk_buff *skb,
 
 	gso_partial = !!(skb_shinfo(segs)->gso_type & SKB_GSO_PARTIAL);
 
+	/*
+	 * HAMZA_TSO: Original IP Header is already append
+	 * with each of the segment. It will just
+	 * update the IP ID for the segments
+	 */
 	skb = segs;
 	do {
 		iph = (struct iphdr *)(skb_mac_header(skb) + nhoff);
@@ -1390,12 +1411,26 @@ struct sk_buff *inet_gso_segment(struct sk_buff *skb,
 				iph->frag_off |= htons(IP_MF);
 			offset += skb->len - nhoff - ihl;
 			tot_len = skb->len - nhoff;
-		} else if (skb_is_gso(skb)) {
+		}
+
+		/*
+		 * HAMZA_TSO: GSO Case
+		 */
+		else if (skb_is_gso(skb)) {
+
+			/*
+			 * HAMZA_TSO: Default case where we have to
+			 * increment IP ID with for each of the
+			 * preceeding segments
+			 */
 			if (!fixedid) {
 				iph->id = htons(id);
 				id += skb_shinfo(skb)->gso_segs;
 			}
 
+			/*
+			 * HAMZA_TSO: Linux specific
+			 */
 			if (gso_partial)
 				tot_len = skb_shinfo(skb)->gso_size +
 					  SKB_GSO_CB(skb)->data_offset +
@@ -1413,7 +1448,11 @@ struct sk_buff *inet_gso_segment(struct sk_buff *skb,
 			skb_reset_inner_headers(skb);
 		skb->network_header = (u8 *)iph - skb->head;
 		skb_reset_mac_len(skb);
-	} while ((skb = skb->next));
+	}
+	/*
+	 * HAMZA_TSO: Loop all the segments
+	 */
+	while ((skb = skb->next));
 
 out:
 	return segs;

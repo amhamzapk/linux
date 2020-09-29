@@ -3739,12 +3739,44 @@ int skb_gro_receive_list(struct sk_buff *p, struct sk_buff *skb)
  *	a pointer to the first in a list of new skbs for the segments.
  *	In case of error it returns ERR_PTR(err).
  */
+
+
+/*
+ * HAMZA_TSO: 6th (last) and actual Function to be
+ * called for GSO Segmentation
+ */
 struct sk_buff *skb_segment(struct sk_buff *head_skb,
 			    netdev_features_t features)
 {
 	struct sk_buff *segs = NULL;
 	struct sk_buff *tail = NULL;
+
+	/*
+	 * HAMZA_TSO: List of IP Fragments
+	 * Before:
+	   sk_buff0->next = sk_buff1
+	   sk_buff1->next = sk_buff2
+	   ...
+	   sk_buffn-1->next = sk_buffn
+
+	   After:
+	   sk_buff0->frag_list = sk_buff1
+	   sk_buff1->next = sk_buff2
+	   ...
+	   sk_buffn-1->next = sk_buffn
+	 */
 	struct sk_buff *list_skb = skb_shinfo(head_skb)->frag_list;
+
+	/*
+	 * HAMZA_TSO: When your device supports scatter-gather I/O,
+	 * and you want it to do the combining of data etc.. you can
+	 * populate frags[] structure starting with the 2nd fragment
+	 * till nth fragment. The first fragment is always specified
+	 * by the data and tail pointers. Rest of the fragments are
+	 * filled in the frags[] structure. If you don't use scatter
+	 * gather, this variable is empty
+	 */
+	// HAMZA_TSO: For scatter gather IO Buffers
 	skb_frag_t *frag = skb_shinfo(head_skb)->frags;
 	unsigned int mss = skb_shinfo(head_skb)->gso_size;
 	unsigned int doffset = head_skb->data - skb_mac_header(head_skb);
@@ -3761,6 +3793,10 @@ struct sk_buff *skb_segment(struct sk_buff *head_skb,
 	int i = 0;
 	int pos;
 
+	/*
+	 * HAMZA_TSO: Fragmentation case, linux specific flag set
+	 * TODO: Should we look into it ?
+	 */
 	if (list_skb && !list_skb->head_frag && skb_headlen(list_skb) &&
 	    (skb_shinfo(head_skb)->gso_type & SKB_GSO_DODGY)) {
 		/* gso_size is untrusted, and we have a frag_list with a linear
@@ -3780,14 +3816,24 @@ struct sk_buff *skb_segment(struct sk_buff *head_skb,
 			features &= ~NETIF_F_SG;
 	}
 
+	/*
+	 * HAMZA_TSO: Populating data from headroom to start of data
+	 */
 	__skb_push(head_skb, doffset);
 	proto = skb_network_protocol(head_skb, NULL);
 	if (unlikely(!proto))
 		return ERR_PTR(-EINVAL);
 
+	/*
+	 * HAMZA_TSO: SG will tell us if it is scatter gather
+	 */
 	sg = !!(features & NETIF_F_SG);
 	csum = !!can_checksum_protocol(features, proto);
 
+	/*
+	 * HAMZA_TSO: Scatter Gather case
+	 * TODO: Look later
+	 */
 	if (sg && csum && (mss != GSO_BY_FRAGS))  {
 		if (!(features & NETIF_F_GSO_PARTIAL)) {
 			struct sk_buff *iter;
@@ -3831,7 +3877,14 @@ struct sk_buff *skb_segment(struct sk_buff *head_skb,
 	}
 
 normal:
+	/*
+	 * HAMZA_TSO: This is 0 because of upper we pushed to HEAD
+	 */
 	headroom = skb_headroom(head_skb);
+
+	/*
+	 * HAMZA_TSO: Length of first segment/fragment
+	 */
 	pos = skb_headlen(head_skb);
 
 	do {
@@ -3843,17 +3896,33 @@ normal:
 		if (unlikely(mss == GSO_BY_FRAGS)) {
 			len = list_skb->len;
 		} else {
+			/*
+			 * HAMZA_TSO: offset from start of data
+			 */
 			len = head_skb->len - offset;
 			if (len > mss)
 				len = mss;
 		}
 
+		/*
+		 * HAMZA_TSO: Size of data for first packet
+		 */
 		hsize = skb_headlen(head_skb) - offset;
 		if (hsize < 0)
 			hsize = 0;
+
+		/*
+		 * HAMZA_TSO: Lets suppose, its not SG case,
+		 * then hsize will equal to length of first data
+		 */
 		if (hsize > len || !sg)
 			hsize = len;
 
+		/*
+		 * HAMZA_TSO: This case will not hit as hsize will be non-zero
+		 * This case is specific to Scatter Gather list
+		 * TODO: Should we look into it ?
+		 */
 		if (!hsize && i >= nfrags && skb_headlen(list_skb) &&
 		    (skb_headlen(list_skb) == len || sg)) {
 			BUG_ON(skb_headlen(list_skb) > len);
@@ -3896,7 +3965,16 @@ normal:
 			nskb->truesize += skb_end_offset(nskb) - hsize;
 			skb_release_head_state(nskb);
 			__skb_push(nskb, doffset);
-		} else {
+		}
+
+		/*
+		 * HAMZA_TSO: This case will hit
+		 */
+		else {
+
+			/*
+			 * HAMZA_TSO: Allocate space for first skb
+			 */
 			nskb = __alloc_skb(hsize + doffset + headroom,
 					   GFP_ATOMIC, skb_alloc_rx_flag(head_skb),
 					   NUMA_NO_NODE);
@@ -3904,29 +3982,83 @@ normal:
 			if (unlikely(!nskb))
 				goto err;
 
+			/*
+			 * HAMZA_TSO: Reserve Tailroom equivalent to headroom
+			 */
 			skb_reserve(nskb, headroom);
+
+			/*
+			 * HAMZA_TSO: Add data to tail equaivalent to headlen
+			 */
 			__skb_put(nskb, doffset);
 		}
 
+		/*
+		 * HAMZA_TSO: Other than first segment case
+		 */
+
 		if (segs)
 			tail->next = nskb;
+
+		/*
+		 * HAMZA_TSO: First segment case
+		 */
 		else
 			segs = nskb;
+
+		/*
+		 * HAMZA_TSO: Tail will point to last segment
+		 */
 		tail = nskb;
 
+		/*
+		 * HAMZA_TSO: Copy all headers to newly allocated segment
+		 * All the headers for each of the segment will be copied here
+		 */
 		__copy_skb_header(nskb, head_skb);
 
+		/*
+		 * HAMZA_TSO: Adjusting Headroom according to original skb
+		 */
 		skb_headers_offset_update(nskb, skb_headroom(nskb) - headroom);
+
+		/*
+		 * HAMZA_TSO: Resetting MAC Header
+		 */
 		skb_reset_mac_len(nskb);
 
+		/*
+		 * HAMZA_TSO: Copy Header from original skb to new segment
+		 * but since headers were already removed, new segment will
+		 * include space for MAC/IP/TCP but not actual values
+		 * TODO: Consider Tunnel case later
+		 */
 		skb_copy_from_linear_data_offset(head_skb, -tnl_hlen,
 						 nskb->data - tnl_hlen,
 						 doffset + tnl_hlen);
 
+		/*
+		 * HAMZA_TSO: Since payload is not being copied, so nskb->len
+		 * will not be equal to mss+offset. Not sure what this check
+		 * is handling
+		 */
 		if (nskb->len == len + doffset)
 			goto perform_csum_check;
 
+		/*
+		 * HAMZA_TSO: If not scatter gather, our case
+		 */
 		if (!sg) {
+
+			/*
+			 * HAMZA_TSO: IP Checksum handling for this segment
+			 * and save it in SKB_GSO_CB()
+			 */
+
+			/*
+			 * This will also copy payload from head_skb
+			 * to new segment
+			 */
 			if (!csum) {
 				if (!nskb->remcsum_offload)
 					nskb->ip_summed = CHECKSUM_NONE;
@@ -3942,11 +4074,23 @@ normal:
 					      skb_put(nskb, len),
 					      len);
 			}
+
+			/*
+			 * HAMZA_TSO: Processing done for this segment
+			 * give next segment try on next iteration
+			 * as we already copied payload
+			 */
 			continue;
 		}
 
+		/*
+		 * HAMZA_TSO: scatter gather segment
+		 */
 		nskb_frag = skb_shinfo(nskb)->frags;
 
+		/*
+		 * HAMZA_TSO: Copy payload according to mss value
+		 */
 		skb_copy_from_linear_data_offset(head_skb, offset,
 						 skb_put(nskb, hsize), hsize);
 
@@ -3957,6 +4101,10 @@ normal:
 		    skb_zerocopy_clone(nskb, frag_skb, GFP_ATOMIC))
 			goto err;
 
+		/*
+		 * HAMZA_TSO: Scatter gather case
+		 * TODO: Should we look into it ?
+		 */
 		while (pos < offset + len) {
 			if (i >= nfrags) {
 				i = 0;
@@ -4013,11 +4161,21 @@ normal:
 		}
 
 skip_fraglist:
+		/*
+		 * HAMZA_TSO: Scatter Gather Case,
+		 * not to look now
+		 * TODO: Should we look into it ?
+		 */
 		nskb->data_len = len - hsize;
 		nskb->len += nskb->data_len;
 		nskb->truesize += nskb->data_len;
 
 perform_csum_check:
+		/*
+		 * HAMZA_TSO: Scatter Gather Case,
+		 * not to look now
+		 * TODO: Should we look into it ?
+		 */
 		if (!csum) {
 			if (skb_has_shared_frag(nskb) &&
 			    __skb_linearize(nskb))
@@ -4037,8 +4195,16 @@ perform_csum_check:
 	 * Put it in segs->prev to avoid walking the list.
 	 * (see validate_xmit_skb_list() for example)
 	 */
+
+	/*
+	 * HAMZA_TSO: Point tail to last segment
+	 */
 	segs->prev = tail;
 
+	/*
+	 * HAMZA_TSO: GSO_PARTIAL flag is Linux specific
+	 * TODO: Is it really linux specific ?
+	 */
 	if (partial_segs) {
 		struct sk_buff *iter;
 		int type = skb_shinfo(head_skb)->gso_type;

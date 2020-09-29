@@ -26,12 +26,21 @@ static void tcp_gso_tstamp(struct sk_buff *skb, unsigned int ts_seq,
 	}
 }
 
+/*
+ * HAMZA_TSO: 4th Function to be called for GSO Segmentation
+ */
 static struct sk_buff *tcp4_gso_segment(struct sk_buff *skb,
 					netdev_features_t features)
 {
+	/*
+	 * HAMZA_TSO: Check if TCP type
+	 */
 	if (!(skb_shinfo(skb)->gso_type & SKB_GSO_TCPV4))
 		return ERR_PTR(-EINVAL);
 
+	/*
+	 * HAMZA_TSO: Check if header can be pulled
+	 */
 	if (!pskb_may_pull(skb, sizeof(struct tcphdr)))
 		return ERR_PTR(-EINVAL);
 
@@ -48,9 +57,15 @@ static struct sk_buff *tcp4_gso_segment(struct sk_buff *skb,
 		__tcp_v4_send_check(skb, iph->saddr, iph->daddr);
 	}
 
+	/*
+	 * HAMZA_TSO: TCP Segmentation
+	 */
 	return tcp_gso_segment(skb, features);
 }
 
+/*
+ * HAMZA_TSO: 5th Function to be called for GSO Segmentation
+ */
 struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 				netdev_features_t features)
 {
@@ -71,6 +86,9 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 	if (thlen < sizeof(*th))
 		goto out;
 
+	/*
+	 * HAMZA_TSO: Pull TCP Header out
+	 */
 	if (!pskb_may_pull(skb, thlen))
 		goto out;
 
@@ -95,11 +113,19 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 	/* All segments but the first should have ooo_okay cleared */
 	skb->ooo_okay = 0;
 
+	/*
+	 * HAMZA_TSO: Actual Segmentation is being done here
+	 * segs will be link list of segmented skbuff
+	 * according to mss value
+	 */
 	segs = skb_segment(skb, features);
 	if (IS_ERR(segs))
 		goto out;
 
 	/* Only first segment might have ooo_okay set */
+	/*
+	 * HAMZA_TSO: Ignore this case for now
+	 */
 	segs->ooo_okay = ooo_okay;
 
 	/* GSO partial and frag_list segmentation only requires splitting
@@ -111,7 +137,14 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 
 	delta = htonl(oldlen + (thlen + mss));
 
+	/*
+	 * HAMZA_TSO: Point skb to semgented list
+	 */
 	skb = segs;
+
+	/*
+	 * HAMZA_TSO: Pointer of TCP Header
+	 */
 	th = tcp_hdr(skb);
 	seq = ntohl(th->seq);
 
@@ -121,21 +154,40 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 	newcheck = ~csum_fold((__force __wsum)((__force u32)th->check +
 					       (__force u32)delta));
 
+	/*
+	 * HAMZA_TSO: Iterate through all the segments
+	 */
 	while (skb->next) {
+		/*
+		 * HAMZA_TSO: Update TCP Flags
+		 */
 		th->fin = th->psh = 0;
 		th->check = newcheck;
 
+		/*
+		 * HAMZA_TSO: Update checksum,
+		 * This is where we have to update checksum
+		 * for each of the device
+		 */
 		if (skb->ip_summed == CHECKSUM_PARTIAL)
 			gso_reset_checksum(skb, ~th->check);
 		else
 			th->check = gso_make_checksum(skb, ~th->check);
 
+		/*
+		 * Update Sequence number for each of the packet
+		 * += MSS Value
+		 */
 		seq += mss;
 		if (copy_destructor) {
 			skb->destructor = gso_skb->destructor;
 			skb->sk = gso_skb->sk;
 			sum_truesize += skb->truesize;
 		}
+
+		/*
+		 * HAMZA_TSO: Next segment and update flags
+		 */
 		skb = skb->next;
 		th = tcp_hdr(skb);
 
@@ -147,6 +199,9 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 	 * The callback to TCP stack will be called at the time last frag
 	 * is freed at TX completion, and not right now when gso_skb
 	 * is freed by GSO engine
+	 */
+	/*
+	 * HAMZA_TSO: Ignore this case for now
 	 */
 	if (copy_destructor) {
 		int delta;
@@ -164,6 +219,10 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 			WARN_ON_ONCE(refcount_sub_and_test(-delta, &skb->sk->sk_wmem_alloc));
 	}
 
+	/*
+	 * HAMZA_TSO: Ignore this, we will calculate checksum for
+	 * each segment in device ourselves
+	 */
 	delta = htonl(oldlen + (skb_tail_pointer(skb) -
 				skb_transport_header(skb)) +
 		      skb->data_len);

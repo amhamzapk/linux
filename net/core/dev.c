@@ -3300,22 +3300,33 @@ __be16 skb_network_protocol(struct sk_buff *skb, int *depth)
  *	@skb: buffer to segment
  *	@features: features for the output path (see dev->features)
  */
+/*
+ * HAMZA_TSO: 2nd Function called
+ * for GSO Segmentation
+ */
 struct sk_buff *skb_mac_gso_segment(struct sk_buff *skb,
 				    netdev_features_t features)
 {
 	struct sk_buff *segs = ERR_PTR(-EPROTONOSUPPORT);
 	struct packet_offload *ptype;
+	// TSO: MAC Header length including outer vlan header (if present)
 	int vlan_depth = skb->mac_len;
 	__be16 type = skb_network_protocol(skb, &vlan_depth);
 
 	if (unlikely(!type))
 		return ERR_PTR(-EINVAL);
 
+	// TSO: Ethernet header will be removed
 	__skb_pull(skb, vlan_depth);
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(ptype, &offload_base, list) {
 		if (ptype->type == type && ptype->callbacks.gso_segment) {
+			/*
+			 * HAMZA_TSO: Skbuff wihtout ETH+VLAN header will be passed
+			 * to inet_gso_segment callback which will call tcp_gso_segment
+			 * and return number of segments
+			 */
 			segs = ptype->callbacks.gso_segment(skb, features);
 			break;
 		}
@@ -3324,6 +3335,9 @@ struct sk_buff *skb_mac_gso_segment(struct sk_buff *skb,
 
 	__skb_push(skb, skb->data - skb_mac_header(skb));
 
+	/*
+	 * HAMZA_TSO: Return segmented skbuffs
+	 */
 	return segs;
 }
 EXPORT_SYMBOL(skb_mac_gso_segment);
@@ -3352,6 +3366,10 @@ static inline bool skb_needs_check(struct sk_buff *skb, bool tx_path)
  *	only possible when GSO is used for verifying header integrity.
  *
  *	Segmentation preserves SKB_GSO_CB_OFFSET bytes of previous skb cb.
+ */
+
+/*
+ * HAMZA_TSO: 1st Function called for GSO Segmentation
  */
 struct sk_buff *__skb_gso_segment(struct sk_buff *skb,
 				  netdev_features_t features, bool tx_path)
@@ -3383,17 +3401,29 @@ struct sk_buff *__skb_gso_segment(struct sk_buff *skb,
 	BUILD_BUG_ON(SKB_GSO_CB_OFFSET +
 		     sizeof(*SKB_GSO_CB(skb)) > sizeof(skb->cb));
 
+	/*
+	 * HAMZA_TSO: Save MAC Offset in GSO Control Block
+	 */
 	SKB_GSO_CB(skb)->mac_offset = skb_headroom(skb);
 	SKB_GSO_CB(skb)->encap_level = 0;
 
+	/*
+	 * HAMZA_TSO: Pointing MAC header to start of data
+	 */
 	skb_reset_mac_header(skb);
 	skb_reset_mac_len(skb);
 
+	/*
+	 * HAMZA_TSO: Pass this to MAC Segmentation layer
+	 */
 	segs = skb_mac_gso_segment(skb, features);
 
 	if (segs != skb && unlikely(skb_needs_check(skb, tx_path) && !IS_ERR(segs)))
 		skb_warn_bad_offload(skb);
 
+	/*
+	 * HAMZA_TSO: Return semgented TSO
+	 */
 	return segs;
 }
 EXPORT_SYMBOL(__skb_gso_segment);
