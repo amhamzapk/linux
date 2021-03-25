@@ -313,6 +313,7 @@ DECLARE_STATIC_KEY_FALSE(mds_idle_clear);
 
 #include <asm/segment.h>
 
+// HAMZA- TAA Mitigation
 /**
  * mds_clear_cpu_buffers - Mitigation for MDS and TAA vulnerability
  *
